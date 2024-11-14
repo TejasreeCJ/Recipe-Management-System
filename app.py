@@ -9,8 +9,8 @@ app.secret_key = 'tej_and_sush'
 db_config = {
     'host': 'localhost',
     'user': 'root',
-    'password': 'tej@170104',
-    'db': 'Recipe_Manager1',
+    'password': 'sush@1724',
+    'db': 'Recipe_Manager',
 }
 
 def get_db_connection():
@@ -97,7 +97,20 @@ def recipes(category):
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
-            cursor.execute('SELECT * FROM Recipe WHERE category = %s', (category,))
+            # Modify query to use 'ID' instead of 'recipe_id'
+            query = """
+            SELECT ID, name, category, rating,
+                   CASE WHEN ID = (
+                       SELECT ID
+                       FROM Recipe
+                       WHERE category = %s
+                       ORDER BY average_rating DESC  -- Assuming you are calculating average rating
+                       LIMIT 1
+                   ) THEN 1 ELSE 0 END AS is_highest_rated
+            FROM Recipe
+            WHERE category = %s
+            """
+            cursor.execute(query, (category, category))
             recipes = cursor.fetchall()
     except Exception as e:
         return f"Error fetching recipes: {str(e)}"
@@ -106,6 +119,7 @@ def recipes(category):
             connection.close()
 
     return render_template('recipes.html', recipes=recipes, category=category, user=user_info)
+
 
 @app.route('/recipe/<int:recipe_id>')
 def view_recipe(recipe_id):
@@ -118,13 +132,12 @@ def view_recipe(recipe_id):
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
-            # Get the recipe details and average rating
+            # Get the recipe details and average rating (from Recipe table)
             cursor.execute(''' 
-                SELECT R.*, 
-                       (SELECT AVG(value) FROM Rating WHERE Recipe_ID = %s) AS average_rating 
-                FROM Recipe R 
+                SELECT R.*, R.average_rating
+                FROM Recipe R
                 WHERE R.ID = %s
-            ''', (recipe_id, recipe_id))
+            ''', (recipe_id,))
             recipe = cursor.fetchone()
 
             # Convert average rating to stars (1-5 scale)
@@ -154,7 +167,6 @@ def view_recipe(recipe_id):
 
     return render_template('view_recipe.html', recipe=recipe, comments=comments, nutritional_info=nutritional_info, ingredients=ingredients, ratings=ratings, star_rating=star_rating, user=user_info)
 
-
 @app.route('/add_recipe/<category>', methods=['GET', 'POST'])
 def add_recipe(category):
     categories = ["Veg", "Non-Veg", "Beverages", "Desserts"]
@@ -162,39 +174,34 @@ def add_recipe(category):
         return redirect(url_for('login'))
 
     if request.method == 'POST':
+        # Collect all form inputs
         name = request.form['name']
-        prep_time = int(request.form['prepTime'])  # Convert to integer for calculation
+        prep_time = int(request.form['prepTime'])  
         cook_time = int(request.form['cookTime'])  
-        servings = request.form['servings']# Convert to integer for calculation
-        total_time = prep_time + cook_time  # Calculate totalTime automatically
+        servings = int(request.form['servings'])  # Ensure it's an integer
+        total_time = prep_time + cook_time  # Calculate totalTime
         url = request.form.get('url', '')
         course = request.form['course']
         cuisine = request.form['cuisine']
         diet = request.form['diet']
         instructions = request.form['instructions']
-        ingredients = request.form['ingredients']
-        calories = request.form.get('calories', 0)
-        carbs = request.form.get('carbs', 0)
-        proteins = request.form.get('proteins', 0)
-        fats = request.form.get('fats', 0)
+        ingredients = request.form['ingredients']  # Comma-separated string format
+        calories = int(request.form.get('calories', 0))
+        carbs = int(request.form.get('carbs', 0))
+        proteins = int(request.form.get('proteins', 0))
+        fats = int(request.form.get('fats', 0))
         user_id = session.get('id')
 
         connection = None
         try:
             connection = get_db_connection()
             with connection.cursor() as cursor:
-                cursor.execute(
-                    'INSERT INTO Recipe (name, prepTime, cookTime, servings, totalTime, url, category, course, cuisine, diet, instructions, U_id) '
-                    'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-                    (name, prep_time, cook_time, servings, total_time, url, category, course, cuisine, diet, instructions, user_id)
-                )
-                recipe_id = cursor.lastrowid
-                cursor.execute(
-                    'INSERT INTO Nutritional_Info (Recipe_ID, Calories, Carbs, Proteins, Fats) VALUES (%s, %s, %s, %s, %s)',
-                    (recipe_id, calories, carbs, proteins, fats)
-                )
-                for ingredient in ingredients.split(','):
-                    cursor.execute('INSERT INTO Ingredient (I_name, Recipe_ID) VALUES (%s, %s)', (ingredient.strip(), recipe_id))
+                # Call the stored procedure with all 17 parameters
+                cursor.callproc('AddRecipeWithIngredients', (
+                    name, prep_time, cook_time, servings, total_time, url, category,
+                    course, cuisine, diet, instructions, user_id,
+                    calories, carbs, proteins, fats, ingredients
+                ))
                 connection.commit()
             return redirect(url_for('recipes', category=category))
         except Exception as e:
@@ -205,6 +212,8 @@ def add_recipe(category):
                 connection.close()
 
     return render_template('add_recipe.html', categories=categories, category=category)
+
+
 
 
 @app.route('/edit_recipe/<int:recipe_id>', methods=['GET', 'POST'])
@@ -337,7 +346,12 @@ def add_rating(recipe_id):
         connection = get_db_connection()
         with connection.cursor() as cursor:
             cursor.execute('INSERT INTO Rating (value, Recipe_ID, User_ID) VALUES (%s, %s, %s)', (rating, recipe_id, user_id))
-            connection.commit()
+            connection.commit()  # This will trigger the AFTER INSERT trigger
+
+            # Optionally, you can fetch the updated average rating here if needed:
+            cursor.execute('SELECT average_rating FROM Recipe WHERE ID = %s', (recipe_id,))
+            avg_rating = cursor.fetchone()
+
     except Exception as e:
         return f"Error adding rating: {str(e)}"
     finally:
@@ -345,48 +359,6 @@ def add_rating(recipe_id):
             connection.close()
 
     return redirect(url_for('view_recipe', recipe_id=recipe_id))
-
-
-# Aggregate Query Route
-@app.route('/aggregate')
-def aggregate_data():
-    connection = None
-    try:
-        connection = get_db_connection()
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT AVG(Calories) as avg_calories, SUM(Calories) as total_calories FROM Nutritional_Info")
-            result = cursor.fetchone()
-        return render_template('aggregate_data.html', result=result)
-    except Exception as e:
-        return f"Error fetching aggregate data: {str(e)}"
-    finally:
-        if connection:
-            connection.close()
-
-
-# Route for join data
-@app.route('/join')
-def join_data():
-    connection = None
-    try:
-        connection = get_db_connection()
-        with connection.cursor() as cursor:
-            query = """
-                SELECT Recipe.name AS recipe_name, User.U_name AS user_name
-                FROM Recipe
-                JOIN User ON Recipe.U_id = User.ID
-            """
-            cursor.execute(query)
-            result = cursor.fetchall()
-        
-        return render_template('join_data.html', results=result)
-    except Exception as e:
-        return f"Error fetching joined data: {str(e)}"
-    finally:
-        if connection:
-            connection.close()
-
-
 
 # Route for nested query
 @app.route('/nested')
