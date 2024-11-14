@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Aggregate Data</title>
+    <style>
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: center;
+      }
+      th {
+        background-color: #4caf50;
+        color: white;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Aggregate Data by User</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>User Name</th>
+          <th>Total Recipes</th>
+          <th>Average Rating</th>
+          <th>Average Calories</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in results %}
+        <tr>
+          <td>{{ row.User_Name }}</td>
+          <td>{{ row.Total_Recipes }}</td>
+          <td>{{ row.Average_Rating }}</td>
+          <td>{{ row.Average_Calories }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
+</html>
